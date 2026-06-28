@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+# NLP
+spacy
+nltk
+# Vector search
+faiss-cpu
+sentence-transformers
+numpy
+# Graph
+neo4j
+networkx
+rdflib
+# Utilities
+pydantic

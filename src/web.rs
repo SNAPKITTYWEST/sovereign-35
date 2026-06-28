@@ -130,18 +130,19 @@ async fn legs(http: &reqwest::Client, spec: &str) -> Result<String> {
 
 // ── Hands: pgvector context retrieval ────────────────────────────────────────
 async fn hands(http: &reqwest::Client, query: &str) -> String {
-    let body = serde_json::json!({ "query": query, "k": 3 });
-    match http.post(PGVECTOR_URL).json(&body).send().await {
-        Ok(resp) => {
-            let data: serde_json::Value = resp.json().await.unwrap_or_default();
-            data["results"].as_array()
-                .map(|v| v.iter()
-                    .map(|r| r["text"].as_str().unwrap_or("").to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n---\n"))
-                .unwrap_or_else(|| "HANDS_OFFLINE — pgvector not running (stub: no context retrieved)".to_string())
+    let body = serde_json::json!({ "query": query, "k": 5 });
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        http.post(PGVECTOR_URL).json(&body).send()
+    ).await {
+        Ok(Ok(resp)) => {
+            match resp.text().await {
+                Ok(text) => text,
+                Err(_)   => "HANDS_OFFLINE — response parse error".to_string(),
+            }
         }
-        Err(_) => "HANDS_OFFLINE — pgvector not running (corpus retrieval skipped)".to_string()
+        Ok(Err(_)) => "HANDS_OFFLINE — FAISS+Neo4j+RDF not running (start: python hands/hands_server.py)".to_string(),
+        Err(_)     => "HANDS_TIMEOUT — 8s exceeded".to_string(),
     }
 }
 
@@ -186,7 +187,18 @@ async fn workflow_handler(
 
     // ── STEP 2: HANDS — pgvector retrieval (parallel with brain output ready) ──
     let t = std::time::Instant::now();
-    let context = hands(&state.http, &prompt).await;
+    // HANDS returns {results, context, nlp, graph, rdf, layers, worm}
+    // Use the pre-formatted "context" string if available, else raw
+    let hands_raw = hands(&state.http, &prompt).await;
+    let context = if hands_raw.starts_with("HANDS_OFFLINE") {
+        hands_raw.clone()
+    } else {
+        // Try to parse as JSON and extract context field
+        serde_json::from_str::<serde_json::Value>(&hands_raw)
+            .ok()
+            .and_then(|v| v["context"].as_str().map(|s| s.to_string()))
+            .unwrap_or(hands_raw.clone())
+    };
 
     let mut worm = state.worm.lock().await;
     let h2 = worm.seal("HANDS");
@@ -200,7 +212,7 @@ async fn workflow_handler(
         ms:     t.elapsed().as_millis(),
     });
 
-    // ── STEP 3: LEGS — Granite vLLM (only on code prompts) ───────────────────
+    // ── STEP 3: LEGS — Granite vLLM (Tokio JoinSet, timeout 30s) ────────────
     let legs_out = if is_code {
         let t = std::time::Instant::now();
         let spec = format!(
@@ -208,16 +220,27 @@ async fn workflow_handler(
             brain_out, context, prompt
         );
 
-        // Tokio spawn — legs run independently, brain doesn't block
-        let http_clone = state.http.clone();
-        let spec_clone = spec.clone();
-        let legs_handle = tokio::spawn(async move {
-            legs(&http_clone, &spec_clone).await
-        });
+        // JoinSet: spawn legs as independent task — Brain never blocks on Legs
+        let http_clone  = state.http.clone();
+        let spec_clone  = spec.clone();
+        let mut set     = tokio::task::JoinSet::new();
+        set.spawn(async move { legs(&http_clone, &spec_clone).await });
 
-        let result = legs_handle.await
-            .unwrap_or_else(|e| Ok(format!("SPAWN_ERR: {}", e)))
-            .unwrap_or_else(|e| format!("LEGS_ERR: {}", e));
+        // Wait with 30s timeout — if Granite is slow/offline, fail fast
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            set.join_next()
+        )
+        .await
+        .map(|opt| match opt {
+            Some(Ok(Ok(s)))  => s,
+            Some(Ok(Err(e))) => format!("LEGS_ERR: {}", e),
+            Some(Err(e))     => format!("SPAWN_ERR: {}", e),
+            None             => "LEGS_OFFLINE — start Granite: python -m vllm.entrypoints.openai.api_server --model ibm-granite/granite-3.3-8b-instruct --port 8000".to_string(),
+        })
+        .unwrap_or_else(|_| "LEGS_TIMEOUT (30s) — Granite did not respond".to_string());
+
+        set.abort_all(); // clean up any remaining tasks
 
         let mut worm = state.worm.lock().await;
         let h3 = worm.seal("LEGS");
@@ -225,7 +248,7 @@ async fn workflow_handler(
 
         steps.push(WorkflowStep {
             step:   "LEGS".to_string(),
-            model:  format!("Granite vLLM (local · {})", LEGS_MODEL),
+            model:  format!("Granite vLLM (local · Tokio JoinSet · {})", LEGS_MODEL),
             output: result.clone(),
             worm:   h3,
             ms:     t.elapsed().as_millis(),
