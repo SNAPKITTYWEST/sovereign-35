@@ -1,4 +1,3 @@
-use anyhow::Result;
 use tokio::process::Command;
 
 pub enum GateVerdict {

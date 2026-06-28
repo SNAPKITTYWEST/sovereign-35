@@ -119,8 +119,7 @@ async fn run_turn(
             worm.seal(&format!("BEDROCK|{}", &response[..response.len().min(32)]));
         }
         Err(e) => {
-            println!("{} {}", "BEDROCK ERR:".red(), e);
-            println!("{}", "Tip: check AWS region — Claude 3.5 needs us-east-1 or us-west-2".dimmed());
+            println!("{} {:?}", "BEDROCK ERR:".red(), e);
             worm.seal("BEDROCK:ERR");
         }
     }

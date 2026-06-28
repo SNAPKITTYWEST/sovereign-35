@@ -2,7 +2,7 @@ use anyhow::Result;
 use aws_sdk_bedrockruntime::{Client, primitives::Blob};
 use serde_json::{json, Value};
 
-pub const MODEL_ID: &str = "us.anthropic.claude-3-5-sonnet-20241022-v2:0";
+pub const MODEL_ID: &str = "us.anthropic.claude-sonnet-4-6";
 
 pub async fn invoke(
     client: &Client,

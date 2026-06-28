@@ -1,7 +1,6 @@
-use anyhow::Result;
 use tokio::process::Command;
 
-pub async fn constrain(query: &str, facts: &[&str]) -> String {
+pub async fn constrain(_query: &str, facts: &[&str]) -> String {
     // Build Prolog constraint program from query + facts
     let mut program = String::new();
     program.push_str(":- initialization(main, main).\n\n");
