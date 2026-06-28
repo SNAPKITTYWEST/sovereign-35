@@ -10,6 +10,10 @@ authors     = ["Ahmad Ali Parr — SnapKitty Collective"]
 name = "sovereign"
 path = "src/main.rs"
 
+[[bin]]
+name = "frankenstein"
+path = "src/web.rs"
+
 [dependencies]
 tokio        = { version = "1",   features = ["full"] }
 reqwest      = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
@@ -24,3 +28,6 @@ sha2         = "0.10"
 hex          = "0.4"
 chrono       = { version = "0.4", features = ["serde"] }
 urlencoding  = "2"
+axum         = "0.7"
+tower-http   = { version = "0.5", features = ["cors"] }
+tokio-stream = "0.1"
